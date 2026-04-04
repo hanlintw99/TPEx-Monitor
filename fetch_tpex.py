@@ -72,8 +72,8 @@ else:
 today = datetime.now()
 new_data_list = []
 
-# 檢查最近 7 天，確保周末也不漏掉
-for i in range(7):
+# 檢查最近 500 天，確保周末也不漏掉
+for i in range(500):
     d_str = (today - timedelta(days=i)).strftime('%Y%m%d')
     if not db_df.empty and d_str in db_df['日期'].values.tolist():
         continue
