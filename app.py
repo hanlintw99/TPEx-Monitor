@@ -13,7 +13,7 @@ FILE_NAME = "tpex_database.csv"
 DB_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{REPO_NAME}/main/{FILE_NAME}"
 
 st.set_page_config(page_title="可轉債監控網頁", layout="wide")
-st.title("📈 可轉債單筆大額拆解監測")
+st.title("📈 可轉債大額交易雲端監測")
 
 @st.cache_data(ttl=600)
 def load_data():
@@ -78,7 +78,7 @@ if not df.empty:
         # 顯示結果
         st.subheader(f"📊 篩選結果 ({start_d} ~ {end_d}, 門檻 > {threshold})")
         if not result.empty:
-            display_cols = ['日期', '標的證券代號', '標的證券名稱', '單筆平均張數', '名目本金', '成交筆數']
+            display_cols = ['日期', '標的證券代號', '標的證券名稱', '單筆平均規模(十萬)', '名目本金', '成交筆數']
             st.dataframe(result[display_cols], use_container_width=True)
             
             # 提供 Excel 下載
