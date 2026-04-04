@@ -4,8 +4,8 @@ import io
 import requests
 
 # 💡 請確實替換為您的 GitHub 資訊
-GITHUB_USER = "您的GitHub帳號"
-REPO_NAME = "您的專案名稱"
+GITHUB_USER = "hanlintw99"
+REPO_NAME = "TPEx-Monitor"
 FILE_PATH = "tpex_database.csv"
 
 # 使用標準的 Raw 檔案連結
