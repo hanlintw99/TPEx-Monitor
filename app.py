@@ -86,7 +86,7 @@ with col1:
 with col2:
     end_date = st.date_input("📅 結束日期", datetime.now())
 with col3:
-    threshold = st.number_input("🎯 篩選門檻 (單筆平均規模 > X 十萬)", value=50.0, step=5.0)
+    threshold = st.number_input("🎯 篩選門檻 (單筆平均規模 > X張)", value=50.0, step=5.0)
 
 st.markdown("---")
 
