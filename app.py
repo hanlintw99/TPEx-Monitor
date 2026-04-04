@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import os
+import csv
 
 # --- 建立本地快取資料夾 (硬碟快取) ---
 DATA_DIR = "TPEx_Data"
@@ -12,21 +13,20 @@ os.makedirs(DATA_DIR, exist_ok=True)
 st.set_page_config(page_title="可轉債大額交易篩選", page_icon="📈", layout="wide")
 
 st.title("📈 可轉債選擇權端 - 大額交易動態篩選器")
-st.markdown("⚡ **極速體驗**：內建記憶體與硬碟雙重快取。只要抓取過一次，後續更改條件完全「秒速」顯示！")
+st.markdown("⚡ **專業解析版**：採用 CSV 嚴格解析引擎，支援跨行標題與特殊編碼。")
 
 # ==========================================
-# 核心引擎：獨立的資料獲取函數 + Streamlit 記憶體快取
+# 核心引擎：使用 csv 模組精準解析
 # ==========================================
 @st.cache_data(show_spinner=False)
 def fetch_and_parse_data(date_str):
-    """這個函數只要執行過一次，結果就會被保存在記憶體中"""
     file_path = os.path.join(DATA_DIR, f"資產交換選擇權端_{date_str}.csv")
-    file_content_text = ""
+    content = ""
     
-    # 1. 檢查硬碟快取
+    # 1. 檢查硬碟是否有快取
     if os.path.exists(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
-            file_content_text = f.read()
+            content = f.read()
     else:
         # 2. 網路抓取
         api_url = f"https://www.tpex.org.tw/www/zh-tw/extendProduct/statTrDl?type=daily&fileName=CBdas001&date={date_str}"
@@ -34,44 +34,51 @@ def fetch_and_parse_data(date_str):
         try:
             res = requests.get(api_url, headers=headers, timeout=10)
             if res.status_code == 200 and "404" not in res.text and "<html" not in res.text:
-                file_content_text = res.text
-                # 下載成功後存入硬碟
+                # 轉為 utf-8 存檔
+                content = res.text
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(file_content_text)
-        except Exception:
+                    f.write(content)
+        except:
             pass
             
-    # 3. 解析並回傳 DataFrame (不包含動態篩選條件)
-    if not file_content_text:
+    if not content:
         return pd.DataFrame()
         
+    # 3. 使用 csv.reader 解析 (重要：處理標題內的換行符號)
+    f_io = io.StringIO(content)
+    reader = csv.reader(f_io)
     valid_data = []
-    for line in file_content_text.split('\n'):
-        line = line.strip()
-        if not line: continue
-        sep = '\t' if '\t' in line else ','
-        parts = [p.replace('"', '').replace('=', '').strip() for p in line.split(sep)]
-        if len(parts) >= 8 and parts[0].isdigit():
-            valid_data.append(parts[:8])
+    
+    for row in reader:
+        if not row or len(row) < 4: continue
+        
+        # 清除 Excel 常見的 ="代碼" 格式與空白
+        code = row[0].replace('=', '').replace('"', '').strip()
+        
+        # 關鍵：只要第一欄是純數字(代號)，就是我們要的資料行
+        if code.isdigit():
+            # 取得名稱、名目本金(row[2])、成交筆數(row[3])
+            name = row[1].replace('=', '').replace('"', '').strip()
+            principal = row[2].replace(',', '').strip()
+            count = row[3].replace(',', '').strip()
+            
+            valid_data.append([date_str, code, name, principal, count])
             
     if valid_data:
-        df = pd.DataFrame(valid_data, columns=['標的證券代號', '標的證券名稱', '名目本金', '成交筆數', '最低', '最高', '平均', '契約期間'])
-        df['名目本金'] = df['名目本金'].astype(str).str.replace(',', '', regex=False)
-        df['成交筆數'] = df['成交筆數'].astype(str).str.replace(',', '', regex=False)
+        df = pd.DataFrame(valid_data, columns=['日期', '標的證券代號', '標的證券名稱', '名目本金', '成交筆數'])
+        # 轉換數值型態
         df['名目本金'] = pd.to_numeric(df['名目本金'], errors='coerce')
         df['成交筆數'] = pd.to_numeric(df['成交筆數'], errors='coerce')
         df = df.dropna(subset=['名目本金', '成交筆數'])
         df = df[df['成交筆數'] > 0]
         
-        # 預先算好數值，並加上日期
+        # 計算結果
         df['單筆平均規模(十萬)'] = df['名目本金'] / df['成交筆數'] / 100000
-        df['日期'] = date_str
         return df
-    else:
-        return pd.DataFrame()
+    return pd.DataFrame()
 
 # ==========================================
-# UI 介面設定
+# UI 介面
 # ==========================================
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -84,57 +91,48 @@ with col3:
 st.markdown("---")
 
 # ==========================================
-# 執行按鈕邏輯
+# 按鈕與邏輯
 # ==========================================
 if st.button("🚀 開始抓取與篩選", type="primary"):
     if start_date > end_date:
         st.error("❌ 起始日期不能晚於結束日期喔！")
     else:
-        with st.spinner("正在處理資料（只要抓過一次，二次篩選即為秒殺速度）..."):
-            all_data_list = []
-            
+        with st.spinner("正在精準解析每一天資料..."):
+            all_dfs = []
             delta = end_date - start_date
-            dates_to_fetch = [start_date + timedelta(days=i) for i in range(delta.days + 1)]
-            progress_bar = st.progress(0)
+            dates = [start_date + timedelta(days=i) for i in range(delta.days + 1)]
             
-            # 1. 將指定區間的每一天丟進快取函數
-            for i, target_date in enumerate(dates_to_fetch):
-                date_str = target_date.strftime('%Y%m%d')
+            p_bar = st.progress(0)
+            for i, d in enumerate(dates):
+                d_str = d.strftime('%Y%m%d')
+                day_df = fetch_and_parse_data(d_str)
+                if not day_df.empty:
+                    all_dfs.append(day_df)
+                p_bar.progress((i + 1) / len(dates))
+            
+            if all_dfs:
+                full_df = pd.concat(all_dfs, ignore_index=True)
+                # 動態篩選
+                final_result = full_df[full_df['單筆平均規模(十萬)'] > threshold].copy()
                 
-                # 這裡會被秒殺，因為有 @st.cache_data 的保護
-                df_daily = fetch_and_parse_data(date_str)
-                if not df_daily.empty:
-                    all_data_list.append(df_daily)
+                if not final_result.empty:
+                    st.success(f"🎉 成功！在 {len(dates)} 天中找到 {len(final_result)} 筆達標資料。")
                     
-                progress_bar.progress((i + 1) / len(dates_to_fetch))
-                
-            # 2. 整合與動態篩選
-            if all_data_list:
-                big_df = pd.concat(all_data_list, ignore_index=True)
-                
-                # 這裡才是套用您輸入的 threshold (門檻) 的地方！
-                filtered_df = big_df[big_df['單筆平均規模(十萬)'] > threshold]
-                
-                if not filtered_df.empty:
-                    final_cols = ['日期', '標的證券代號', '標的證券名稱', '名目本金', '成交筆數', '單筆平均規模(十萬)']
-                    final_result = filtered_df[final_cols]
+                    # 調整欄位順序美化顯示
+                    display_cols = ['日期', '標的證券代號', '標的證券名稱', '名目本金', '成交筆數', '單筆平均規模(十萬)']
+                    st.dataframe(final_result[display_cols], use_container_width=True)
                     
-                    st.success(f"🎉 處理完成！共找到 {len(final_result)} 筆單筆規模大於 {threshold} 的資料。")
-                    st.dataframe(final_result, use_container_width=True)
-                    
-                    # 準備 Excel 下載
+                    # 下載按鈕
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        final_result.to_excel(writer, index=False, sheet_name='篩選結果')
-                    excel_data = output.getvalue()
-                    
+                        final_result[display_cols].to_excel(writer, index=False)
                     st.download_button(
                         label="📥 下載 Excel 報表",
-                        data=excel_data,
-                        file_name=f"大額交易篩選_{start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        data=output.getvalue(),
+                        file_name=f"CB_Filter_{datetime.now().strftime('%H%M%S')}.xlsx",
+                        mime="application/vnd.ms-excel"
                     )
                 else:
-                    st.info(f"在所選期間內有交易紀錄，但沒有單筆規模大於 {threshold} 的項目。您可以試著調低門檻再次測試！")
+                    st.info(f"這幾天有資料，但沒有任何一項超過您的門檻 {threshold}。請試著調低門檻。")
             else:
-                st.warning("⚠️ 所選期間內完全沒有找到有效的交易資料（可能為假日）。")
+                st.warning("⚠️ 所選期間櫃買中心無資料 (可能全是假日)。")
