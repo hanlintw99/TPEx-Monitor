@@ -9,7 +9,7 @@ REPO_NAME = "TPEx-Monitor"
 FILE_PATH = "tpex_database.csv"
 
 # 使用標準的 Raw 檔案連結
-DB_URL = f"https://raw.githubusercontent.com/hanlintw99/TPEx-Monitor/refs/heads/main/tpex_database.csv"
+DB_URL = f"https://raw.githubusercontent.com/hanlintw99/TPEx-Monitor/main/tpex_database.csv"
 
 st.set_page_config(page_title="可轉債監控網頁", layout="wide")
 st.title("📈 可轉債大額交易雲端監測")
