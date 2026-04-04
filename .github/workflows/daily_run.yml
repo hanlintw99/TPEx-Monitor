@@ -2,16 +2,13 @@ name: Daily Update Database
 
 on:
   schedule:
-    - cron: '30 9 * * *' # 每天台灣時間 17:30
-  workflow_dispatch: # 允許手動執行
-
-# 這裡加入環境變數，強制 Actions 使用 Node.js 24 執行，消除警告
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    - cron: '30 9 * * *' # 台灣時間 17:30
+  workflow_dispatch:      # 允許手動執行
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 💡 核心：明確授予寫入權限
     permissions:
       contents: write
     
@@ -32,10 +29,11 @@ jobs:
     - name: Run Scraper
       run: python fetch_tpex.py
 
-    - name: Commit and Push
-      run: |
-        git config --global user.name "GitHub Action"
-        git config --global user.email "action@github.com"
-        git add tpex_database.csv
-        # 檢查是否有變動，有的話才提交
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Update TPEx data" && git push)
+    - name: Commit and Push changes
+      # 💡 使用官方推薦的自動提交工具，解決 128 錯誤
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "Update TPEx data $(date +'%Y-%m-%d')"
+        file_pattern: 'tpex_database.csv'
+        commit_user_name: "github-actions[bot]"
+        commit_user_email: "github-actions[bot]@users.noreply.github.com"
