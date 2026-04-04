@@ -11,6 +11,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 DB_FILE = "tpex_database.csv"
 
 def fetch_data(date_str):
+    # 櫃買中心成交簡表 API
     api_url = f"https://www.tpex.org.tw/www/zh-tw/extendProduct/statTrDl?type=daily&fileName=CBdas001&date={date_str}"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
@@ -21,61 +22,54 @@ def fetch_data(date_str):
         if response.status_code == 200:
             content = response.content
             if b"404" in content[:500] or b"<html" in content[:500] or len(content) < 100:
-                print(f"⏩ {date_str}：查無資料。")
                 return None
             
-            # 嘗試兩種讀取方式：先嘗試當作真實 Excel，失敗再當作 CSV
+            # 櫃買 CSV 格式：第 5 行開始是資料
+            # 欄位順序通常是：代號, 名稱, 名目本金, 成交筆數, 權利金, 最高, 最低, 收盤價...
             try:
-                # 策略 A: 真實 Excel (.xls)
-                df = pd.read_excel(io.BytesIO(content), engine='xlrd')
-            except:
-                try:
-                    # 策略 B: CSV 格式
-                    df = pd.read_csv(io.BytesIO(content), skiprows=4, header=None, on_bad_lines='skip', engine='python')
-                except:
-                    return None
-
-            # 資料清洗邏輯
-            if df is not None and len(df.columns) >= 4:
-                # 找出含有「代號」或「Code」的那一行或是直接找第一列數字
-                # 為了穩定，我們尋找第一欄是數字的行
-                df.columns = [f'col_{i}' for i in range(len(df.columns))]
+                df = pd.read_csv(io.BytesIO(content), skiprows=4, header=None, on_bad_lines='skip', engine='python')
                 
-                # 清理代號欄位
-                df['col_0'] = df['col_0'].astype(str).str.replace('=', '').str.replace('"', '').str.strip()
-                mask = df['col_0'].str.isnumeric()
-                df = df[mask].copy()
-                
-                if not df.empty:
-                    df = df.iloc[:, :4]
-                    df.columns = ['標的證券代號', '標的證券名稱', '名目本金', '成交筆數']
+                if len(df.columns) >= 8:
+                    # 擷取關鍵欄位：0:代號, 1:名稱, 2:名目本金, 3:成交筆數, 7:收盤價
+                    df = df.iloc[:, [0, 1, 2, 3, 7]]
+                    df.columns = ['標的證券代號', '標的證券名稱', '名目本金', '成交筆數', '當日收盤價']
+                    
+                    # 清理代號
+                    df['標的證券代號'] = df['標的證券代號'].astype(str).str.replace('=', '').str.replace('"', '').str.strip()
+                    df = df[df['標的證券代號'].str.isnumeric()]
+                    
+                    # 數值轉換
                     df['名目本金'] = pd.to_numeric(df['名目本金'].astype(str).str.replace(',', ''), errors='coerce')
                     df['成交筆數'] = pd.to_numeric(df['成交筆數'].astype(str).str.replace(',', ''), errors='coerce')
+                    df['當日收盤價'] = pd.to_numeric(df['當日收盤價'].astype(str).str.replace(',', ''), errors='coerce')
+                    
                     df = df.dropna(subset=['名目本金', '成交筆數'])
+                    df = df[df['成交筆數'] > 0]
                     df['日期'] = date_str
-                    print(f"✅ {date_str}：解析成功。")
+                    
+                    print(f"✅ {date_str}：抓取成功，包含收盤價。")
                     return df
+            except Exception as e:
+                print(f"❌ {date_str} 解析失敗: {e}")
     except Exception as e:
-        print(f"❌ {date_str}：連線或解析異常 - {e}")
+        print(f"❌ {date_str} 連線失敗: {e}")
     return None
 
 # --- 主程式 ---
 if os.path.exists(DB_FILE):
-    try:
-        db_df = pd.read_csv(DB_FILE)
-        db_df['日期'] = db_df['日期'].astype(str)
-    except:
-        db_df = pd.DataFrame()
+    db_df = pd.read_csv(DB_FILE)
+    db_df['日期'] = db_df['日期'].astype(str)
 else:
     db_df = pd.DataFrame()
 
 today = datetime.now()
 new_data_list = []
 
-# 檢查最近 500 天，確保周末也不漏掉
-for i in range(500):
+# 檢查最近 7 天
+for i in range(7):
     d_str = (today - timedelta(days=i)).strftime('%Y%m%d')
-    if not db_df.empty and d_str in db_df['日期'].values.tolist():
+    # 如果資料庫已存在該日資料且含有「當日收盤價」欄位，則跳過
+    if not db_df.empty and '當日收盤價' in db_df.columns and d_str in db_df['日期'].values.tolist():
         continue
     
     day_df = fetch_data(d_str)
@@ -87,6 +81,6 @@ if new_data_list:
     combined_df = combined_df.drop_duplicates(subset=['日期', '標的證券代號'], keep='last')
     combined_df = combined_df.sort_values('日期', ascending=False)
     combined_df.to_csv(DB_FILE, index=False, encoding='utf-8-sig')
-    print(f"🎉 資料庫已更新，總筆數：{len(combined_df)}")
+    print(f"🎉 資料庫已更新並儲存收盤價。")
 else:
     print("ℹ️ 無新資料。")
