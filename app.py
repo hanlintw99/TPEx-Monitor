@@ -13,7 +13,7 @@ FILE_NAME = "tpex_database.csv"
 DB_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{REPO_NAME}/main/{FILE_NAME}"
 
 st.set_page_config(page_title="可轉債監控網頁", layout="wide")
-st.title("📈 可轉債大額交易雲端監測")
+st.title("📈 可轉債單筆大額拆解監測")
 
 @st.cache_data(ttl=600)
 def load_data():
