@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import io
 import requests
-import yfinance as yf
 from datetime import datetime, timedelta
 
+# 💡 請確認您的 GitHub 資訊
 GITHUB_USER = "hanlintw99"
 REPO_NAME = "TPEx-Monitor"
 FILE_NAME = "tpex_database.csv"
@@ -21,55 +21,48 @@ def load_data():
             df = pd.read_csv(io.BytesIO(response.content), encoding='utf-8-sig')
             df['日期'] = df['日期'].astype(str)
             df['DateObj'] = pd.to_datetime(df['日期'], format='%Y%m%d').dt.date
+            # 計算篩選指標
             df['單筆平均規模(十萬)'] = df['名目本金'] / df['成交筆數'] / 100000
             return df
         return pd.DataFrame()
     except:
         return pd.DataFrame()
 
-# 獲取最新即時價格的函數
-@st.cache_data(ttl=3600)
-def fetch_latest_prices(symbols):
-    latest_prices = {}
-    for sym in symbols:
-        try:
-            # 嘗試 .TWO (櫃買)
-            ticker = yf.Ticker(f"{sym}.TWO")
-            hist = ticker.history(period="1d")
-            if not hist.empty:
-                latest_prices[str(sym)] = round(hist['Close'].iloc[-1], 2)
-            else:
-                latest_prices[str(sym)] = "N/A"
-        except:
-            latest_prices[str(sym)] = "Error"
-    return latest_prices
-
 df = load_data()
 
 if not df.empty:
     st.sidebar.header("⚙️ 篩選設定")
-    min_date, max_date = df['DateObj'].min(), df['DateObj'].max()
-    date_range = st.sidebar.date_input("📅 選擇區間", value=(max_date - timedelta(days=7), max_date), min_value=min_date, max_value=max_date)
-    threshold = st.sidebar.slider("🎯 門檻 (十萬)", 10, 200, 50)
+    
+    # 日期區間選取
+    min_date = df['DateObj'].min()
+    max_date = df['DateObj'].max()
+    
+    date_range = st.sidebar.date_input(
+        "📅 選擇日期區間",
+        value=(max_date - timedelta(days=7), max_date),
+        min_value=min_date,
+        max_value=max_date
+    )
+    
+    threshold = st.sidebar.slider("🎯 單筆平均規模門檻 (十萬)", 10, 200, 50)
     
     if len(date_range) == 2:
         start_d, end_d = date_range
         mask = (df['DateObj'] >= start_d) & (df['DateObj'] <= end_d) & (df['單筆平均規模(十萬)'] >= threshold)
         result = df[mask].copy()
         
+        st.subheader(f"📊 篩選結果 ({start_d} ~ {end_d})")
         if not result.empty:
-            # 只有在需要時才去抓 Yahoo 最新價
-            if st.sidebar.button("🔄 同步最新市價"):
-                latest_map = fetch_latest_prices(result['標的證券代號'].unique())
-                result['最新收盤價'] = result['標的證券代號'].astype(str).map(latest_map)
-            else:
-                result['最新收盤價'] = "點擊同步"
-
-            st.subheader(f"📊 篩選結果 ({start_d} ~ {end_d})")
-            # 欄位排序
-            cols = ['日期', '標的證券代號', '標的證券名稱', '單筆平均規模(十萬)', '當日收盤價', '最新收盤價', '名目本金', '成交筆數']
-            st.dataframe(result[cols].sort_values('日期', ascending=False), use_container_width=True)
+            # 💡 依照日期降序排列
+            display_df = result.sort_values(['日期', '單筆平均規模(十萬)'], ascending=[False, False])
+            # 排除輔助用的 DateObj，只顯示乾淨的欄位
+            show_cols = ['日期', '標的證券代號', '標的證券名稱', '單筆平均規模(十萬)', '名目本金', '成交筆數']
+            st.dataframe(display_df[show_cols], use_container_width=True)
+            
+            # 下載按鈕
+            csv = display_df[show_cols].to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(label="📥 下載 CSV 報表", data=csv, file_name="CB_Report.csv", mime="text/csv")
         else:
             st.info("此區間無達標資料。")
 else:
-    st.warning("⚠️ 正在等待資料庫產出...")
+    st.warning("⚠️ 正在從 GitHub 讀取資料庫，請稍候...")
