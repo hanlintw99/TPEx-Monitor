@@ -5,6 +5,10 @@ on:
     - cron: '30 8 * * *' # 每天台灣時間 16:30
   workflow_dispatch: # 允許手動執行
 
+# 這裡加入環境變數，強制 Actions 使用 Node.js 24 執行，消除警告
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,10 +17,10 @@ jobs:
     
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4  # 升級至 v4
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v5 # 升級至 v5
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
@@ -33,5 +37,5 @@ jobs:
         git config --global user.name "GitHub Action"
         git config --global user.email "action@github.com"
         git add tpex_database.csv
-        # 只有當檔案有變動時才 commit，避免無意義報錯
+        # 檢查是否有變動，有的話才提交
         git diff --quiet && git diff --staged --quiet || (git commit -m "Update TPEx data" && git push)
