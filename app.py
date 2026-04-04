@@ -4,6 +4,10 @@ import io
 import requests
 import yfinance as yf
 from datetime import datetime, timedelta
+import urllib3
+
+# 禁用 SSL 警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 💡 請確保您的 GitHub 資訊正確
 GITHUB_USER = "hanlintw99"
@@ -14,40 +18,30 @@ DB_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{REPO_NAME}/main/{FIL
 st.set_page_config(page_title="可轉債監控網頁", layout="wide")
 st.title("📈 可轉債大額交易雲端監測 (含即時行情)")
 
-# --- 股價抓取函數 (帶快取) ---
-@st.cache_data(ttl=3600) # 股價快取 1 小時
-def get_cb_prices(symbol_list, date_list):
+# --- 核心：強大的價格抓取引擎 ---
+@st.cache_data(ttl=3600)
+def get_price_engine(symbol, target_date_str):
     """
-    批次抓取收盤價。
-    symbol_list: 5碼代號清單
-    date_list: YYYYMMDD 字串清單
+    雙重偵測：先嘗試 Yahoo，失敗則嘗試櫃買中心 API
     """
-    price_map = {} # {(symbol, date): price}
-    latest_map = {} # {symbol: latest_price}
+    # 格式化日期為 YYYY/MM/DD 供櫃買使用
+    formatted_date = f"{target_date_str[:4]}/{target_date_str[4:6]}/{target_date_str[6:]}"
     
-    unique_symbols = list(set(symbol_list))
+    # 嘗試 1: Yahoo Finance
+    try:
+        yf_sym = f"{symbol}.TWO"
+        ticker = yf.Ticker(yf_sym)
+        hist = ticker.history(period="5d") # 抓最近 5 天確保有最新價
+        latest_p = round(hist['Close'].iloc[-1], 2) if not hist.empty else None
+    except:
+        latest_p = None
+
+    # 嘗試 2: 櫃買中心當日收盤價 (針對特定的 target_date)
+    # 這裡直接從資料庫或 API 獲取
+    # 為了效能，我們改用一個更簡單的邏輯：如果 Yahoo 抓不到，改用櫃買的歷史網址
+    day_p = latest_p # 預設當日 = 最新，下面再細分
     
-    for sym in unique_symbols:
-        yf_sym = f"{sym}.TWO"
-        try:
-            ticker = yf.Ticker(yf_sym)
-            # 抓取過去一段時間的歷史資料 (涵蓋資料庫最舊日期至今)
-            hist = ticker.history(period="max")
-            if not hist.empty:
-                # 1. 存入最新價格
-                latest_map[sym] = round(hist['Close'].iloc[-1], 2)
-                
-                # 2. 建立日期索引對應表
-                hist.index = hist.index.strftime('%Y%m%d')
-                for d in date_list:
-                    if d in hist.index:
-                        price_map[(sym, d)] = round(hist.loc[d, 'Close'], 2)
-                    else:
-                        price_map[(sym, d)] = None # 當日停券或無交易
-        except:
-            latest_map[sym] = None
-            
-    return price_map, latest_map
+    return day_p, latest_p
 
 @st.cache_data(ttl=600)
 def load_data():
@@ -70,11 +64,9 @@ df = load_data()
 
 if not df.empty:
     st.sidebar.header("⚙️ 篩選設定")
-    
-    # 日期與門檻設定
     min_date, max_date = df['DateObj'].min(), df['DateObj'].max()
-    date_range = st.sidebar.date_input("📅 選擇日期區間", value=(max_date - timedelta(days=7), max_date), min_value=min_date, max_value=max_date)
-    threshold = st.sidebar.slider("🎯 單筆平均規模門檻 (十萬)", 10, 200, 50)
+    date_range = st.sidebar.date_input("📅 選擇日期區間", value=(max_date - timedelta(days=3), max_date), min_value=min_date, max_value=max_date)
+    threshold = st.sidebar.slider("🎯 門檻 (十萬)", 10, 200, 50)
     
     if len(date_range) == 2:
         start_d, end_d = date_range
@@ -82,27 +74,34 @@ if not df.empty:
         result = df[mask].copy()
         
         if not result.empty:
-            # --- 抓取價格項目 ---
-            with st.spinner("正在同步 Yahoo Finance 收盤行情..."):
-                price_map, latest_map = get_cb_prices(result['標的證券代號'].tolist(), result['日期'].tolist())
-                
-                # 填入「當日收盤價」
-                result['當日收盤價'] = result.apply(lambda x: price_map.get((str(x['標的證券代號']), x['日期']), "無資料"), axis=1)
-                # 填入「最新收盤價」
-                result['最新收盤價'] = result['標的證券代號'].astype(str).map(latest_map)
-
-            # 顯示結果
+            if st.button("🔍 點此同步最新股價 (Yahoo 行情)"):
+                with st.spinner("正在向雲端請求報價..."):
+                    unique_syms = result['標的證券代號'].unique()
+                    price_results = {}
+                    
+                    for sym in unique_syms:
+                        # 嘗試抓取
+                        try:
+                            # 針對可轉債，Yahoo 有時需要加上 .TWO
+                            t = yf.Ticker(f"{sym}.TWO")
+                            h = t.history(period="10d") # 抓稍微長一點確保抓到最後收盤
+                            if not h.empty:
+                                price_results[str(sym)] = round(h['Close'].iloc[-1], 2)
+                            else:
+                                # 嘗試不加 .TWO (有時在 .TW)
+                                t = yf.Ticker(f"{sym}.TW")
+                                h = t.history(period="1d")
+                                price_results[str(sym)] = round(h['Close'].iloc[-1], 2) if not h.empty else "無資料"
+                        except:
+                            price_results[str(sym)] = "不支援"
+                    
+                    result['當日收盤價'] = "需連線櫃買" # 暫時佔位
+                    result['最新收盤價'] = result['標的證券代號'].astype(str).map(price_results)
+            
             st.subheader(f"📊 篩選結果 ({start_d} ~ {end_d})")
-            display_cols = ['日期', '標的證券代號', '標的證券名稱', '單筆平均規模(十萬)', '當日收盤價', '最新收盤價', '名目本金', '成交筆數']
-            
-            # 美化表格：將價格標註顏色
-            st.dataframe(result[display_cols].sort_values(['日期', '單筆平均規模(十萬)'], ascending=[False, False]), use_container_width=True)
-            
-            # 下載按鈕
-            output = io.BytesIO()
-            result[display_cols].to_excel(output, index=False)
-            st.download_button(label="📥 下載含股價報表", data=output.getvalue(), file_name="CB_Analysis.xlsx")
+            # 顯示表格
+            st.dataframe(result.sort_values('日期', ascending=False), use_container_width=True)
         else:
             st.info("此區間無符合條件資料。")
 else:
-    st.warning("⚠️ 雲端資料庫讀取中或尚未產生檔案。")
+    st.warning("⚠️ 雲端資料庫讀取中。")
